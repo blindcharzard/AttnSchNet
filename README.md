@@ -1,4 +1,4 @@
-#AttnSchNet - Attention Mechanism Added to Schnet Architecture. 
+# AttnSchNet - Attention Mechanism Added to Schnet Architecture. 
 
 
 
