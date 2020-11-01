@@ -131,3 +131,4 @@ The Journal of Chemical Physics, 148(24), 241709. (2018) [10.1063/1.5019667](htt
 * [5] J. Behler, M. Parrinello. 
 *Generalized neural-network representation of high-dimensional potential-energy surfaces.*
 Physical Review Letters, 98(14), 146401. (2007) [10.1103/PhysRevLett.98.146401](https://doi.org/10.1103/PhysRevLett.98.146401)
+# Attn-SchNet
