@@ -32,11 +32,28 @@ class SchNetInteraction(nn.Module):
         cutoff,
         cutoff_network=CosineCutoff,
         normalize_filter=False,
+        n_heads_weights = 0,
+        n_heads_conv = 0,
+        device = torch.device("cpu"),
+        hyperparams = [0,0],
+        dropout = 0,
+        exp = False
     ):
         super(SchNetInteraction, self).__init__()
+
+        #-# add extra dimensions here for the (dimension of attention embeddings)* num_heads
+        self.n_heads_weights = n_heads_weights
+        self.n_heads_conv = n_heads_conv
+        self.device = device
+        if n_heads_weights > 0:
+            n = 1
+        else:
+            n=0
         # filter block used in interaction block
+        #n_spatial_basis corresponds to the number of gaussian expansions
+        #n_atom_basis corresponds to the dimension of the atomic embedding corresponding to the projection of attention values
         self.filter_network = nn.Sequential(
-            Dense(n_spatial_basis, n_filters, activation=shifted_softplus),
+            Dense(n_spatial_basis+n_atom_basis*n, n_filters, activation=shifted_softplus), #n_atom_basis could be changed to n_attention_heads*attention_dim at a later time
             Dense(n_filters, n_filters),
         )
         # cutoff layer used in interaction block
@@ -50,10 +67,15 @@ class SchNetInteraction(nn.Module):
             cutoff_network=self.cutoff_network,
             activation=shifted_softplus,
             normalize_filter=normalize_filter,
+            n_heads_weights = self.n_heads_weights,
+            n_heads_conv = self.n_heads_conv,
+            device = self.device,
+            hyperparams=hyperparams,
+            dropout = dropout,
+            exp = False
         )
         # dense layer
         self.dense = Dense(n_atom_basis, n_atom_basis, bias=True, activation=None)
-
     def forward(self, x, r_ij, neighbors, neighbor_mask, f_ij=None):
         """Compute interaction output.
 
@@ -72,7 +94,7 @@ class SchNetInteraction(nn.Module):
 
         """
         # continuous-filter convolution interaction block followed by Dense layer
-        v = self.cfconv(x, r_ij, neighbors, neighbor_mask, f_ij)
+        v = self.cfconv(x, r_ij, neighbors, neighbor_mask, f_ij,softmax = False)
         v = self.dense(v)
         return v
 
@@ -123,7 +145,7 @@ class SchNet(nn.Module):
         n_filters=128,
         n_interactions=3,
         cutoff=5.0,
-        n_gaussians=25,
+        n_gaussians=32,
         normalize_filter=False,
         coupled_interactions=False,
         return_intermediate=False,
@@ -132,9 +154,17 @@ class SchNet(nn.Module):
         trainable_gaussians=False,
         distance_expansion=None,
         charged_systems=False,
+        n_heads_weights = 0,
+        n_heads_conv = 0,
+        device = torch.device("cpu"),
+        hyperparams = [0,0],
+        dropout = 0,
+        exp = False
     ):
         super(SchNet, self).__init__()
-
+        self.device = device
+        self.n_heads_weights = n_heads_weights
+        self.n_heads_conv = n_heads_conv
         self.n_atom_basis = n_atom_basis
         # make a lookup table to store embeddings for each element (up to atomic
         # number max_z) each of which is a vector of size n_atom_basis
@@ -163,6 +193,12 @@ class SchNet(nn.Module):
                         cutoff_network=cutoff_network,
                         cutoff=cutoff,
                         normalize_filter=normalize_filter,
+                        n_heads_conv=n_heads_conv,
+                        n_heads_weights=n_heads_weights,
+                        device = self.device,
+                        hyperparams = hyperparams,
+                        dropout = dropout,
+                        exp = exp
                     )
                 ]
                 * n_interactions
@@ -177,7 +213,12 @@ class SchNet(nn.Module):
                         n_filters=n_filters,
                         cutoff_network=cutoff_network,
                         cutoff=cutoff,
-                        normalize_filter=normalize_filter,
+                        n_heads_conv=n_heads_conv,
+                        n_heads_weights=n_heads_weights,
+                        device = self.device,
+                        hyperparams = hyperparams,
+                        dropout = dropout,
+                        exp = exp
                     )
                     for _ in range(n_interactions)
                 ]
@@ -189,7 +230,7 @@ class SchNet(nn.Module):
         if charged_systems:
             self.charge = nn.Parameter(torch.Tensor(1, n_atom_basis))
             self.charge.data.normal_(0, 1.0 / n_atom_basis ** 0.5)
-
+        self.dropout = nn.Dropout(dropout)
     def forward(self, inputs):
         """Compute atomic representations/embeddings.
 
@@ -213,7 +254,7 @@ class SchNet(nn.Module):
 
         # get atom embeddings for the input atomic numbers
         x = self.embedding(atomic_numbers)
-
+        # x = self.dropout(x)
         if False and self.charged_systems and Properties.charge in inputs.keys():
             n_atoms = torch.sum(atom_mask, dim=1, keepdim=True)
             charge = inputs[Properties.charge] / n_atoms  # B
@@ -224,18 +265,28 @@ class SchNet(nn.Module):
         r_ij = self.distances(
             positions, neighbors, cell, cell_offset, neighbor_mask=neighbor_mask
         )
+        #r_ij = self.dropout(r_ij)
         # expand interatomic distances (for example, Gaussian smearing)
         f_ij = self.distance_expansion(r_ij)
+
+        # !!!!!!!!!!!!!!!!!!!!-----------------------------------------------------------------###
+        #no dropout here may be the reason it does worse on bigger sets.
+        #f_ij = self.dropout(f_ij)
+        # !!!!!!!!!!!!!!!!!!!!-----------------------------------------------------------------###
+
         # store intermediate representations
         if self.return_intermediate:
             xs = [x]
         # compute interaction block to update atomic embeddings
         for interaction in self.interactions:
             v = interaction(x, r_ij, neighbors, neighbor_mask, f_ij=f_ij)
+            #v = self.dropout(v)
             x = x + v
             if self.return_intermediate:
                 xs.append(x)
 
         if self.return_intermediate:
             return x, xs
+        #[125, 17, 128]
+        #x = self.final2(self.final1(x.reshape(-1,self.n_atom_basis))).reshape(125,-1).mean(dim=1)
         return x
